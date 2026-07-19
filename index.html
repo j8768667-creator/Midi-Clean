@@ -2,8 +2,8 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover">
-<title>MIDI Cleaner Lite v1.3 iPad</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MIDI Cleaner Lite v1.2</title>
 <style>
 :root{--bg:#0d1117;--panel:#161b22;--panel2:#21262d;--line:#30363d;--text:#e6edf3;--muted:#8b949e;--accent:#58a6ff;--good:#3fb950;--warn:#d29922;--bad:#f85149}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,-apple-system,Segoe UI,sans-serif}
@@ -29,45 +29,6 @@ canvas{width:100%;height:390px;background:#0b0f14;border:1px solid var(--line);b
 .goodText{color:var(--good)}.warnText{color:var(--warn)}.badText{color:var(--bad)}
 #status{color:var(--muted);margin-top:9px}.hidden{display:none}
 @media(max-width:850px){.grid{grid-template-columns:1fr}.stats{grid-template-columns:repeat(2,1fr)}canvas{height:300px}}
-
-/* iPad / touch optimisation */
-html{-webkit-text-size-adjust:100%;touch-action:manipulation}
-body{padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-right);padding-bottom:env(safe-area-inset-bottom)}
-button,.btn,input,select{font-size:16px}
-button,.btn{min-height:44px;-webkit-tap-highlight-color:transparent;touch-action:manipulation}
-input[type=number],select{min-height:44px}
-input[type=range]{min-height:44px;padding:0;accent-color:var(--accent)}
-input[type=checkbox]{width:22px!important;height:22px;accent-color:var(--accent);flex:0 0 auto}
-.drop{min-height:112px;display:flex;flex-direction:column;justify-content:center;-webkit-tap-highlight-color:transparent;touch-action:manipulation}
-canvas{touch-action:none;-webkit-user-select:none;user-select:none}
-.toolbar{align-items:center}
-.toolbar label{min-height:44px;padding:4px 0}
-#selectedTools{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px}
-#selectedNoteInfo{color:var(--muted);font-size:12px;flex:1 1 180px}
-#deleteSelected{flex:0 0 auto}
-@media(pointer:coarse){
-  button:hover{border-color:#3d444d}
-  .panel{border-radius:14px}
-  .track{padding:12px 0}
-}
-@media(min-width:700px) and (max-width:1180px){
-  main{padding:14px}
-  .grid{grid-template-columns:minmax(290px,34%) 1fr;gap:14px}
-  .panel{padding:14px}
-  .stats{grid-template-columns:repeat(4,minmax(82px,1fr))}
-  canvas{height:360px}
-}
-@media(max-width:699px){
-  header{padding:18px max(16px,env(safe-area-inset-left))}
-  main{padding:12px}
-  .grid{grid-template-columns:1fr}
-  .stats{grid-template-columns:repeat(2,minmax(0,1fr))}
-  .toolbar button{flex:1 1 30%}
-  .toolbar label{flex:1 1 100%}
-  canvas{height:320px}
-  .row>*{flex:1 1 100%}
-}
-
 </style>
 </head>
 <body>
@@ -99,10 +60,7 @@ canvas{touch-action:none;-webkit-user-select:none;user-select:none}
 
 <section class="panel">
 <h2>3. Export</h2>
-<div class="row">
-<button id="export" class="primary" disabled>Download cleaned MIDI</button>
-<button id="share" disabled>Share / Save</button>
-</div>
+<button id="export" class="primary" disabled style="width:100%">Download cleaned MIDI</button>
 <p style="color:var(--muted);font-size:12px">Export preserves track separation, tempo, time signature and program changes. Unsupported controller data is not copied.</p>
 </section>
 </aside>
@@ -131,16 +89,15 @@ canvas{touch-action:none;-webkit-user-select:none;user-select:none}
 <label style="margin:0;display:flex;align-items:center;gap:6px">Zoom <input id="zoom" type="range" min="1" max="8" step=".25" value="2" style="width:150px"></label>
 <label style="margin:0;display:flex;align-items:center;gap:6px"><input id="showGhost" type="checkbox" checked style="width:auto"> Show original overlay</label>
 </div>
+<div id="liveOverlay" style="position:relative;height:0">
+<div id="liveChord" style="position:absolute;left:12px;top:-4px;background:rgba(0,0,0,.65);padding:4px 8px;border-radius:6px;font-weight:600;color:#58a6ff">Chord: —</div>
+</div>
 <canvas id="roll"></canvas>
 <div id="rollLegend" style="display:none;font-size:11px;color:var(--muted);margin-top:6px">
 <span style="display:inline-block;width:10px;height:10px;background:rgba(139,148,158,.5);border-radius:2px;margin-right:4px;vertical-align:middle"></span>Original (ghost)
 <span style="display:inline-block;width:10px;height:10px;background:var(--accent);border-radius:2px;margin:0 4px 0 14px;vertical-align:middle"></span>Cleaned
 </div>
-<div style="font-size:11px;color:var(--muted);margin-top:4px">Tap a note to select • drag to move • drag the right edge to resize<span id="editCount"></span></div>
-<div id="selectedTools">
-  <span id="selectedNoteInfo">No note selected.</span>
-  <button id="deleteSelected" disabled>Delete selected note</button>
-</div>
+<div style="font-size:11px;color:var(--muted);margin-top:4px">Click a note to select • drag to move • drag the right edge to resize • Delete/Backspace to remove<span id="editCount"></span></div>
 </section>
 
 <section class="panel">
@@ -364,16 +321,15 @@ function refresh(m){
  $("sLength").textContent=formatTime(a.seconds);$("sPpq").textContent=m.ppq;$("sRange").textContent=a.notes?midiName(a.lo)+"–"+midiName(a.hi):"—";$("sVel").textContent=a.notes?Math.round(a.avgVel):"—";$("sKey").textContent=a.key;
  $("tracks").innerHTML=m.tracks.map((t,i)=>{const n=t.notes,lo=n.length?Math.min(...n.map(x=>x.pitch)):0,hi=n.length?Math.max(...n.map(x=>x.pitch)):0;return `<div class="track"><div><b style="color:${TRACK_COLORS[i%TRACK_COLORS.length]}">${escapeHtml(t.name||"Track "+(i+1))}</b><br><small>${n.length} notes${n.length?" • "+midiName(lo)+"–"+midiName(hi):""}</small></div><span class="badge">Track ${i+1}</span></div>`}).join("");
  drawRoll();
- updateSelectedTools();
 }
 function escapeHtml(s){return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]))}
 function loadFile(file){
  if(!file)return;currentFileName=file.name.replace(/\.(mid|midi)$/i,"")+"_cleaned.mid";$("status").textContent="Reading "+file.name+"…";
- const fr=new FileReader();fr.onload=()=>{try{original=parseMidi(fr.result);cleaned=null;selected=null;manualEdits=0;updateEditCount();refresh(original);$("status").innerHTML=`<span class="goodText">Loaded ${escapeHtml(file.name)}</span>`;["clean","reset","playOriginal"].forEach(id=>$(id).disabled=false);$("playCleaned").disabled=true;$("export").disabled=true;$("share").disabled=true;$("report").innerHTML='<span style="color:var(--muted)">Ready to clean.</span>'}catch(e){$("status").innerHTML=`<span class="badText">${escapeHtml(e.message)}</span>`}};fr.readAsArrayBuffer(file)
+ const fr=new FileReader();fr.onload=()=>{try{original=parseMidi(fr.result);cleaned=null;selected=null;manualEdits=0;updateEditCount();refresh(original);$("status").innerHTML=`<span class="goodText">Loaded ${escapeHtml(file.name)}</span>`;["clean","reset","playOriginal"].forEach(id=>$(id).disabled=false);$("playCleaned").disabled=true;$("export").disabled=true;$("report").innerHTML='<span style="color:var(--muted)">Ready to clean.</span>'}catch(e){$("status").innerHTML=`<span class="badText">${escapeHtml(e.message)}</span>`}};fr.readAsArrayBuffer(file)
 }
 function runClean(){
  const opt={minMs:+$("minMs").value,grid:+$("grid").value,strength:+$("strength").value,velSmooth:+$("velSmooth").value,mergeMs:+$("mergeMs").value,duplicates:$("duplicates").checked,overlaps:$("overlaps").checked,tiny:$("tiny").checked,merge:$("merge").checked};
- const r=cleanMidi(original,opt);cleaned=r.midi;selected=null;manualEdits=0;updateEditCount();refresh(cleaned);$("playCleaned").disabled=false;$("export").disabled=false;$("share").disabled=false;
+ const r=cleanMidi(original,opt);cleaned=r.midi;selected=null;manualEdits=0;updateEditCount();refresh(cleaned);$("playCleaned").disabled=false;$("export").disabled=false;
  const labels={duplicates:"Exact duplicates removed",tiny:"Tiny notes removed",overlaps:"Overlaps repaired",merged:"Repeated notes merged",quantised:"Note starts adjusted",velocities:"Velocities smoothed",noteOffs:"Missing note-offs repaired"};
  $("report").innerHTML=Object.entries(r.report).map(([k,v])=>`<div><b class="${v?"goodText":""}">${v}</b> ${labels[k]}</div>`).join("");
 }
@@ -385,15 +341,6 @@ function ensureEditable(){
 }
 function updateEditCount(){
  $("editCount").textContent=manualEdits?` • ${manualEdits} manual edit${manualEdits===1?"":"s"} applied (lost if you run Clean MIDI again or Reset)`:"";
- updateSelectedTools();
-}
-function updateSelectedTools(){
- const btn=$("deleteSelected"),info=$("selectedNoteInfo");
- if(!selected||!(cleaned||original)){btn.disabled=true;info.textContent="No note selected.";return}
- const m=cleaned||original,t=m.tracks[selected.ti],n=t&&t.notes[selected.ni];
- if(!n){selected=null;btn.disabled=true;info.textContent="No note selected.";return}
- btn.disabled=false;
- info.textContent=`${midiName(n.pitch)} • velocity ${n.velocity} • ${Math.round(tickToSec(n.end-n.start,m)*1000)} ms • ${t.name||"Track "+(selected.ti+1)}`;
 }
 function canvasPos(e){const r=$("roll").getBoundingClientRect();return [e.clientX-r.left,e.clientY-r.top]}
 function hitTest(px,py){
@@ -408,69 +355,52 @@ function hitTest(px,py){
  }
  return null;
 }
-$("roll").addEventListener("pointerdown",e=>{
+$("roll").addEventListener("mousedown",e=>{
  if(!original)return;
  const [px,py]=canvasPos(e),hit=hitTest(px,py);
- if(!hit){selected=null;updateSelectedTools();drawRoll();return}
+ if(!hit){selected=null;drawRoll();return}
  e.preventDefault();
- $("roll").setPointerCapture?.(e.pointerId);
  ensureEditable();
  selected={ti:hit.ti,ni:hit.ni};
- updateSelectedTools();
  const n=cleaned.tracks[hit.ti].notes[hit.ni];
- drag={pointerId:e.pointerId,ti:hit.ti,ni:hit.ni,mode:hit.edge?"resize":"move",startPx:px,startPy:py,origStart:n.start,origEnd:n.end,origPitch:n.pitch,moved:false};
+ drag={ti:hit.ti,ni:hit.ni,mode:hit.edge?"resize":"move",startPx:px,startPy:py,origStart:n.start,origEnd:n.end,origPitch:n.pitch,moved:false};
  drawRoll();
+ const onMove=ev=>{
+   const [mx,my]=canvasPos(ev),dxTicks=(mx-drag.startPx)*(rollLayout.maxTick/rollLayout.w);
+   const dn=cleaned.tracks[drag.ti].notes[drag.ni];
+   const gridSel=+$("grid").value,gridTicks=gridSel?original.ppq*4/gridSel:0;
+   if(Math.abs(mx-drag.startPx)>1||Math.abs(my-drag.startPy)>1)drag.moved=true;
+   if(drag.mode==="resize"){
+     let newEnd=Math.round(drag.origEnd+dxTicks);
+     if(gridTicks)newEnd=Math.round(newEnd/gridTicks)*gridTicks;
+     dn.end=Math.max(dn.start+1,newEnd);
+   }else{
+     const dyRows=(my-drag.startPy)*(rollLayout.range/rollLayout.h);
+     let newStart=Math.max(0,Math.round(drag.origStart+dxTicks));
+     if(gridTicks)newStart=Math.round(newStart/gridTicks)*gridTicks;
+     dn.start=newStart;dn.end=newStart+(drag.origEnd-drag.origStart);
+     dn.pitch=Math.max(0,Math.min(127,Math.round(drag.origPitch-dyRows)));
+   }
+   drawRoll();
+ };
+ const onUp=()=>{
+   if(drag&&drag.moved){manualEdits++;updateEditCount();refresh(cleaned)}
+   drag=null;window.removeEventListener("mousemove",onMove);window.removeEventListener("mouseup",onUp);
+ };
+ window.addEventListener("mousemove",onMove);window.addEventListener("mouseup",onUp);
 });
-$("roll").addEventListener("pointermove",e=>{
- if(!original)return;
- const [mx,my]=canvasPos(e);
- if(!drag){
-   const hit=hitTest(mx,my);
-   $("roll").style.cursor=hit?(hit.edge?"ew-resize":"grab"):"default";
-   return;
- }
- if(e.pointerId!==drag.pointerId)return;
- e.preventDefault();
- const dxTicks=(mx-drag.startPx)*(rollLayout.maxTick/rollLayout.w);
- const dn=cleaned.tracks[drag.ti].notes[drag.ni];
- const gridSel=+$("grid").value,gridTicks=gridSel?original.ppq*4/gridSel:0;
- if(Math.abs(mx-drag.startPx)>2||Math.abs(my-drag.startPy)>2)drag.moved=true;
- if(drag.mode==="resize"){
-   let newEnd=Math.round(drag.origEnd+dxTicks);
-   if(gridTicks)newEnd=Math.round(newEnd/gridTicks)*gridTicks;
-   dn.end=Math.max(dn.start+1,newEnd);
- }else{
-   const dyRows=(my-drag.startPy)*(rollLayout.range/rollLayout.h);
-   let newStart=Math.max(0,Math.round(drag.origStart+dxTicks));
-   if(gridTicks)newStart=Math.round(newStart/gridTicks)*gridTicks;
-   dn.start=newStart;dn.end=newStart+(drag.origEnd-drag.origStart);
-   dn.pitch=Math.max(0,Math.min(127,Math.round(drag.origPitch-dyRows)));
- }
- drawRoll();
- updateSelectedTools();
+$("roll").addEventListener("mousemove",e=>{
+ if(drag||!original)return;
+ const [px,py]=canvasPos(e),hit=hitTest(px,py);
+ $("roll").style.cursor=hit?(hit.edge?"ew-resize":"grab"):"default";
 });
-function finishPointerEdit(e){
- if(!drag||e.pointerId!==drag.pointerId)return;
- if(drag.moved){manualEdits++;updateEditCount();refresh(cleaned)}
- drag=null;
- try{$("roll").releasePointerCapture?.(e.pointerId)}catch{}
-}
-$("roll").addEventListener("pointerup",finishPointerEdit);
-$("roll").addEventListener("pointercancel",finishPointerEdit);
-function deleteSelectedNote(){
- if(!selected)return;
- ensureEditable();
- const t=cleaned.tracks[selected.ti];
- if(!t||!t.notes[selected.ni])return;
- t.notes.splice(selected.ni,1);
- selected=null;manualEdits++;updateEditCount();refresh(cleaned);
-}
-$("deleteSelected").onclick=deleteSelectedNote;
 document.addEventListener("keydown",e=>{
  if((e.key==="Delete"||e.key==="Backspace")&&selected){
    const tag=(document.activeElement&&document.activeElement.tagName)||"";
    if(tag==="INPUT"||tag==="SELECT"||tag==="TEXTAREA")return;
-   e.preventDefault();deleteSelectedNote();
+   e.preventDefault();ensureEditable();
+   cleaned.tracks[selected.ti].notes.splice(selected.ni,1);
+   selected=null;manualEdits++;updateEditCount();refresh(cleaned);
  }
 });
 
@@ -478,35 +408,50 @@ $("drop").onclick=()=>$("file").click();$("file").onchange=e=>loadFile(e.target.
 $("drop").ondragover=e=>{e.preventDefault();$("drop").classList.add("drag")};$("drop").ondragleave=()=>$("drop").classList.remove("drag");
 $("drop").ondrop=e=>{e.preventDefault();$("drop").classList.remove("drag");loadFile(e.dataTransfer.files[0])};
 $("strength").oninput=e=>$("strengthOut").textContent=e.target.value+"%";$("velSmooth").oninput=e=>$("velOut").textContent=e.target.value+"%";
-$("clean").onclick=runClean;$("reset").onclick=()=>{cleaned=null;selected=null;manualEdits=0;updateEditCount();refresh(original);$("playCleaned").disabled=true;$("export").disabled=true;$("share").disabled=true;$("report").innerHTML='<span style="color:var(--muted)">Reset to original.</span>'};
+$("clean").onclick=runClean;$("reset").onclick=()=>{cleaned=null;selected=null;manualEdits=0;updateEditCount();refresh(original);$("playCleaned").disabled=true;$("export").disabled=true;$("report").innerHTML='<span style="color:var(--muted)">Reset to original.</span>'};
 $("playOriginal").onclick=()=>playMidi(original);$("playCleaned").onclick=()=>playMidi(cleaned);$("stop").onclick=stopPlayback;$("zoom").oninput=drawRoll;$("showGhost").onchange=drawRoll;
-function cleanedFile(){
- const data=encodeMidi(cleaned),blob=new Blob([data],{type:"audio/midi"});
- return {blob,file:new File([blob],currentFileName,{type:"audio/midi"})};
-}
-$("export").onclick=()=>{
- const {blob}=cleanedFile(),url=URL.createObjectURL(blob),a=document.createElement("a");
- a.href=url;a.download=currentFileName;document.body.appendChild(a);a.click();a.remove();
- setTimeout(()=>URL.revokeObjectURL(url),2000);
-};
-$("share").onclick=async()=>{
- if(!cleaned)return;
- const {file,blob}=cleanedFile();
- try{
-   if(navigator.canShare?.({files:[file]})&&navigator.share){
-     await navigator.share({files:[file],title:currentFileName});
-   }else{
-     const url=URL.createObjectURL(blob);
-     window.open(url,"_blank");
-     setTimeout(()=>URL.revokeObjectURL(url),10000);
-   }
- }catch(e){
-   if(e.name!=="AbortError")$("status").innerHTML=`<span class="warnText">Share failed. Use Download cleaned MIDI instead.</span>`;
- }
-};
+$("export").onclick=()=>{const data=encodeMidi(cleaned),blob=new Blob([data],{type:"audio/midi"}),a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=currentFileName;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)};
 addEventListener("resize",drawRoll);
 drawRoll();
-updateSelectedTools();
 </script>
+
+<script>
+(function(){
+const oldPlay=window.playMidi;
+if(!oldPlay)return;
+function chordName(notes){
+  if(!notes.length)return "—";
+  const pcs=[...new Set(notes.map(n=>n.pitch%12))].sort((a,b)=>a-b);
+  if(pcs.length>=3){
+    for(const r of pcs){
+      const rel=pcs.map(x=>(x-r+12)%12);
+      if(rel.includes(4)&&rel.includes(7)) return ["C","C#","D","Eb","E","F","F#","G","Ab","A","Bb","B"][r]+" Major";
+      if(rel.includes(3)&&rel.includes(7)) return ["C","C#","D","Eb","E","F","F#","G","Ab","A","Bb","B"][r]+" Minor";
+    }
+  }
+  return notes.map(n=>{
+    const nm=["C","C#","D","Eb","E","F","F#","G","Ab","A","Bb","B"][n.pitch%12];
+    return nm+(Math.floor(n.pitch/12)-1);
+  }).join(" ");
+}
+window.playMidi=async function(m){
+  document.getElementById("liveChord").textContent="Chord: Playing…";
+  const res=await oldPlay(m);
+  const notes=(m.tracks||[]).flatMap(t=>t.notes).sort((a,b)=>a.start-b.start);
+  let i=0;
+  function tick(){
+    if(i>=notes.length)return;
+    const start=notes[i].start;
+    const grp=[];
+    while(i<notes.length && Math.abs(notes[i].start-start)<=20){grp.push(notes[i]);i++;}
+    document.getElementById("liveChord").textContent="Chord: "+chordName(grp);
+    setTimeout(tick,180);
+  }
+  tick();
+  return res;
+}
+})();
+</script>
+
 </body>
 </html>
