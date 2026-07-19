@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MIDI Cleaner Lite v1.0</title>
+<style>
+:root{--bg:#0d1117;--panel:#161b22;--panel2:#21262d;--line:#30363d;--text:#e6edf3;--muted:#8b949e;--accent:#58a6ff;--good:#3fb950;--warn:#d29922;--bad:#f85149}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,-apple-system,Segoe UI,sans-serif}
+header{padding:22px 26px;border-bottom:1px solid var(--line);background:#010409}
+h1{margin:0;font-size:25px}.sub{color:var(--muted);margin-top:5px}
+main{max-width:1280px;margin:auto;padding:18px}.grid{display:grid;grid-template-columns:340px 1fr;gap:16px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:16px}
+h2{font-size:15px;margin:0 0 12px}.drop{border:2px dashed #3d444d;border-radius:10px;padding:25px 12px;text-align:center;cursor:pointer}
+.drop.drag{border-color:var(--accent);background:#10243a}.drop strong{display:block;font-size:16px}
+input[type=file]{display:none}.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.row>*{flex:1}
+button,.btn{border:1px solid #3d444d;background:var(--panel2);color:var(--text);padding:9px 12px;border-radius:8px;cursor:pointer;font-weight:600}
+button:hover{border-color:var(--accent)}button.primary{background:#1f6feb;border-color:#388bfd}button.good{background:#238636;border-color:#2ea043}
+button:disabled{opacity:.45;cursor:not-allowed}label{display:block;color:var(--muted);font-size:12px;margin:10px 0 4px}
+input[type=number],select,input[type=range]{width:100%;background:#0d1117;color:var(--text);border:1px solid var(--line);border-radius:7px;padding:8px}
+.check{display:flex;gap:8px;align-items:center;margin:9px 0;color:var(--text)}.check input{width:auto}
+.stats{display:grid;grid-template-columns:repeat(4,minmax(100px,1fr));gap:8px}
+.stat{background:var(--panel2);border-radius:8px;padding:10px}.stat b{display:block;font-size:18px}.stat span{color:var(--muted);font-size:11px}
+canvas{width:100%;height:390px;background:#0b0f14;border:1px solid var(--line);border-radius:8px;display:block}
+.toolbar{display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap}.toolbar button{flex:0 0 auto}
+.track{padding:9px 0;border-bottom:1px solid var(--line);display:grid;grid-template-columns:1fr auto;gap:8px}.track:last-child{border:0}
+.track small{color:var(--muted)}.badge{padding:2px 7px;border-radius:999px;background:var(--panel2);color:var(--muted);font-size:11px}
+.report{max-height:240px;overflow:auto}.report div{padding:6px 0;border-bottom:1px solid var(--line)}
+.goodText{color:var(--good)}.warnText{color:var(--warn)}.badText{color:var(--bad)}
+#status{color:var(--muted);margin-top:9px}.hidden{display:none}
+@media(max-width:850px){.grid{grid-template-columns:1fr}.stats{grid-template-columns:repeat(2,1fr)}canvas{height:300px}}
+</style>
+</head>
+<body>
+<header><h1>MIDI Cleaner Lite</h1><div class="sub">Inspect, repair, preview and export Standard MIDI files locally in your browser.</div></header>
+<main>
+<div class="grid">
+<aside>
+<section class="panel">
+<h2>1. Load MIDI</h2>
+<div id="drop" class="drop"><strong>Drop a .mid or .midi file here</strong><span>or tap to browse</span></div>
+<input id="file" type="file" accept=".mid,.midi,audio/midi">
+<div id="status">No file loaded.</div>
+</section>
+
+<section class="panel">
+<h2>2. Cleaning settings</h2>
+<label>Minimum note length (milliseconds)</label><input id="minMs" type="number" value="35" min="0" max="1000">
+<label>Quantise grid</label>
+<select id="grid"><option value="0">Off</option><option value="4">1/4 note</option><option value="8">1/8 note</option><option value="16" selected>1/16 note</option><option value="32">1/32 note</option></select>
+<label>Quantise strength: <span id="strengthOut">65%</span></label><input id="strength" type="range" min="0" max="100" value="65">
+<label>Velocity smoothing: <span id="velOut">30%</span></label><input id="velSmooth" type="range" min="0" max="100" value="30">
+<label>Merge gap (milliseconds)</label><input id="mergeMs" type="number" value="20" min="0" max="500">
+<label class="check"><input id="duplicates" type="checkbox" checked> Remove exact duplicate notes</label>
+<label class="check"><input id="overlaps" type="checkbox" checked> Repair same-pitch overlaps</label>
+<label class="check"><input id="tiny" type="checkbox" checked> Remove tiny notes</label>
+<label class="check"><input id="merge" type="checkbox" checked> Merge rapidly repeated notes</label>
+<div class="row"><button id="clean" class="good" disabled>Clean MIDI</button><button id="reset" disabled>Reset</button></div>
+</section>
+
+<section class="panel">
+<h2>3. Export</h2>
+<button id="export" class="primary" disabled style="width:100%">Download cleaned MIDI</button>
+<p style="color:var(--muted);font-size:12px">Export preserves track separation, tempo, time signature and program changes. Unsupported controller data is not copied.</p>
+</section>
+</aside>
+
+<div>
+<section class="panel">
+<h2>File overview</h2>
+<div class="stats">
+<div class="stat"><b id="sTracks">—</b><span>Tracks</span></div>
+<div class="stat"><b id="sNotes">—</b><span>Notes</span></div>
+<div class="stat"><b id="sTempo">—</b><span>Tempo</span></div>
+<div class="stat"><b id="sLength">—</b><span>Length</span></div>
+<div class="stat"><b id="sPpq">—</b><span>PPQ</span></div>
+<div class="stat"><b id="sRange">—</b><span>Pitch range</span></div>
+<div class="stat"><b id="sVel">—</b><span>Avg velocity</span></div>
+<div class="stat"><b id="sKey">—</b><span>Likely key</span></div>
+</div>
+</section>
+
+<section class="panel">
+<h2>Piano roll</h2>
+<div class="toolbar">
+<button id="playOriginal" disabled>▶ Original</button>
+<button id="playCleaned" disabled>▶ Cleaned</button>
+<button id="stop" disabled>■ Stop</button>
+<label style="margin:0;display:flex;align-items:center;gap:6px">Zoom <input id="zoom" type="range" min="1" max="8" step=".25" value="2" style="width:150px"></label>
+</div>
+<canvas id="roll"></canvas>
+</section>
+
+<section class="panel">
+<h2>Tracks</h2><div id="tracks"><span style="color:var(--muted)">Load a MIDI file to inspect its tracks.</span></div>
+</section>
+
+<section class="panel">
+<h2>Cleaning report</h2><div id="report" class="report"><span style="color:var(--muted)">No cleaning run yet.</span></div>
+</section>
+</div>
+</div>
+</main>
+<script>
+"use strict";
+const $=id=>document.getElementById(id);
+const NOTE_NAMES=["C","C♯","D","D♯","E","F","F♯","G","G♯","A","A♯","B"];
+const TRACK_COLORS=["#58a6ff","#3fb950","#d29922","#f778ba","#a371f7","#ff7b72","#79c0ff","#56d364"];
+let original=null, cleaned=null, currentFileName="cleaned.mid", audioCtx=null, activeNodes=[], playTimer=null;
+
+/* ---------- Binary utilities ---------- */
+class Reader{
+ constructor(buf){this.b=new Uint8Array(buf);this.p=0}
+ u8(){if(this.p>=this.b.length)throw Error("Unexpected end of file");return this.b[this.p++]}
+ u16(){return (this.u8()<<8)|this.u8()}
+ u32(){return ((this.u8()<<24)>>>0)+(this.u8()<<16)+(this.u8()<<8)+this.u8()}
+ str(n){let s="";while(n--)s+=String.fromCharCode(this.u8());return s}
+ bytes(n){const x=this.b.slice(this.p,this.p+n);this.p+=n;return x}
+ vlq(){let v=0,c,i=0;do{c=this.u8();v=(v<<7)|(c&127);if(++i>4)throw Error("Invalid VLQ")}while(c&128);return v}
+}
+function writeVLQ(n){let a=[n&127];while(n>>=7)a.unshift((n&127)|128);return a}
+function u16(n){return[(n>>8)&255,n&255]} function u32(n){return[(n>>>24)&255,(n>>>16)&255,(n>>>8)&255,n&255]}
+function ascii(s){return [...s].map(c=>c.charCodeAt(0))}
+
+/* ---------- MIDI parser ---------- */
+function parseMidi(buf){
+ const r=new Reader(buf);
+ if(r.str(4)!=="MThd")throw Error("Not a Standard MIDI file");
+ const hlen=r.u32(),format=r.u16(),ntrks=r.u16(),division=r.u16();
+ if(division&0x8000)throw Error("SMPTE time division is not supported");
+ if(hlen>6)r.bytes(hlen-6);
+ const tracks=[]; let globalTempo=500000,timeSig=[4,4];
+ for(let ti=0;ti<ntrks;ti++){
+   if(r.str(4)!=="MTrk")throw Error("Missing MTrk chunk");
+   const len=r.u32(),end=r.p+len; let tick=0,running=0;
+   const notes=[],events=[],open=new Map(); let name="Track "+(ti+1),programs=new Map();
+   while(r.p<end){
+     tick+=r.vlq(); let status=r.u8();
+     if(status<0x80){r.p--; if(!running)throw Error("Invalid running status");status=running}else if(status<0xF0)running=status;
+     if(status===0xFF){
+       const type=r.u8(),l=r.vlq(),data=r.bytes(l);
+       if(type===0x03)name=new TextDecoder().decode(data);
+       if(type===0x51&&l===3){const mpqn=(data[0]<<16)|(data[1]<<8)|data[2];globalTempo=mpqn;events.push({tick,type:"tempo",mpqn})}
+       if(type===0x58&&l>=2){timeSig=[data[0],2**data[1]];events.push({tick,type:"timesig",num:timeSig[0],den:timeSig[1]})}
+       if(type===0x2F)break;
+       continue;
+     }
+     if(status===0xF0||status===0xF7){r.bytes(r.vlq());continue}
+     const kind=status&0xF0,ch=status&15,d1=r.u8(),d2=(kind===0xC0||kind===0xD0)?0:r.u8();
+     if(kind===0xC0){programs.set(ch,d1);events.push({tick,type:"program",channel:ch,program:d1});continue}
+     if(kind===0x90&&d2>0){
+       const key=ch+":"+d1;if(!open.has(key))open.set(key,[]);
+       open.get(key).push({start:tick,pitch:d1,velocity:d2,channel:ch,program:programs.get(ch)||0});
+     }else if(kind===0x80||(kind===0x90&&d2===0)){
+       const key=ch+":"+d1,arr=open.get(key);
+       if(arr&&arr.length){const n=arr.shift();n.end=Math.max(tick,n.start+1);notes.push(n)}
+     }
+   }
+   for(const arr of open.values())for(const n of arr){n.end=Math.max(tick,n.start+division/8);n.repairedNoteOff=true;notes.push(n)}
+   notes.sort((a,b)=>a.start-b.start||a.pitch-b.pitch);
+   tracks.push({name,notes,events,programs:[...programs.entries()]});
+   r.p=end;
+ }
+ return {format,ppq:division,tempo:globalTempo,timeSig,tracks};
+}
+
+/* ---------- Analysis ---------- */
+function allNotes(m){return m.tracks.flatMap((t,i)=>t.notes.map(n=>({...n,track:i})))}
+function tickToSec(t,m){return t/m.ppq*(m.tempo/1e6)}
+function midiName(n){return NOTE_NAMES[n%12]+(Math.floor(n/12)-1)}
+function analyse(m){
+ const ns=allNotes(m),maxTick=ns.reduce((x,n)=>Math.max(x,n.end),0),vel=ns.reduce((s,n)=>s+n.velocity,0)/(ns.length||1);
+ const lo=ns.length?Math.min(...ns.map(n=>n.pitch)):0,hi=ns.length?Math.max(...ns.map(n=>n.pitch)):0;
+ return {notes:ns.length,maxTick,seconds:tickToSec(maxTick,m),avgVel:vel,lo,hi,key:detectKey(ns)}
+}
+function detectKey(ns){
+ if(!ns.length)return "—";
+ const major=[6.35,2.23,3.48,2.33,4.38,4.09,2.52,5.19,2.39,3.66,2.29,2.88];
+ const minor=[6.33,2.68,3.52,5.38,2.60,3.53,2.54,4.75,3.98,2.69,3.34,3.17];
+ const hist=Array(12).fill(0);ns.forEach(n=>hist[n.pitch%12]+=Math.max(1,n.end-n.start)*n.velocity);
+ const score=(profile,root)=>profile.reduce((s,v,i)=>s+v*hist[(i+root)%12],0);
+ let best={s:-1,label:""};for(let r=0;r<12;r++)for(const [p,suf] of [[major," major"],[minor," minor"]]){const s=score(p,r);if(s>best.s)best={s,label:NOTE_NAMES[r]+suf}}
+ return best.label;
+}
+
+/* ---------- Cleaning engine ---------- */
+function cloneMidi(m){return structuredClone(m)}
+function cleanMidi(m,opt){
+ const out=cloneMidi(m),report={duplicates:0,tiny:0,overlaps:0,merged:0,quantised:0,velocities:0,noteOffs:0};
+ const minTicks=Math.round(opt.minMs/1000*(1e6/m.tempo)*m.ppq);
+ const mergeTicks=Math.round(opt.mergeMs/1000*(1e6/m.tempo)*m.ppq);
+ const gridTicks=opt.grid?m.ppq*4/opt.grid:0;
+ out.tracks.forEach(t=>{
+   let notes=t.notes.map(n=>({...n}));
+   report.noteOffs+=notes.filter(n=>n.repairedNoteOff).length;
+   if(opt.duplicates){
+     const seen=new Set();notes=notes.filter(n=>{const k=[n.channel,n.pitch,n.start,n.end].join(":");if(seen.has(k)){report.duplicates++;return false}seen.add(k);return true});
+   }
+   if(opt.tiny){notes=notes.filter(n=>{if(n.end-n.start<Math.max(1,minTicks)){report.tiny++;return false}return true})}
+   notes.sort((a,b)=>a.channel-b.channel||a.pitch-b.pitch||a.start-b.start);
+   if(opt.overlaps){
+     for(let i=0;i<notes.length-1;i++){const a=notes[i],b=notes[i+1];if(a.channel===b.channel&&a.pitch===b.pitch&&a.end>b.start){a.end=Math.max(a.start+1,b.start);report.overlaps++}}
+   }
+   if(opt.merge){
+     const merged=[];for(const n of notes){const a=merged[merged.length-1];if(a&&a.channel===n.channel&&a.pitch===n.pitch&&n.start-a.end<=mergeTicks&&n.start>=a.start){a.end=Math.max(a.end,n.end);a.velocity=Math.round((a.velocity+n.velocity)/2);report.merged++}else merged.push({...n})}notes=merged;
+   }
+   if(gridTicks){
+     const strength=opt.strength/100;
+     for(const n of notes){const dur=n.end-n.start,target=Math.round(n.start/gridTicks)*gridTicks,newStart=Math.round(n.start+(target-n.start)*strength);if(newStart!==n.start)report.quantised++;n.start=Math.max(0,newStart);n.end=Math.max(n.start+1,n.start+dur)}
+   }
+   if(opt.velSmooth>0&&notes.length>2){
+     const amount=opt.velSmooth/100,sorted=[...notes].sort((a,b)=>a.start-b.start);
+     for(let i=0;i<sorted.length;i++){const around=sorted.slice(Math.max(0,i-2),i+3),avg=around.reduce((s,n)=>s+n.velocity,0)/around.length;const nv=Math.max(1,Math.min(127,Math.round(sorted[i].velocity+(avg-sorted[i].velocity)*amount)));if(nv!==sorted[i].velocity)report.velocities++;sorted[i].velocity=nv}
+   }
+   notes.forEach(n=>{n.velocity=Math.max(1,Math.min(127,n.velocity|0));n.pitch=Math.max(0,Math.min(127,n.pitch|0));n.end=Math.max(n.start+1,n.end|0)});
+   notes.sort((a,b)=>a.start-b.start||a.pitch-b.pitch);t.notes=notes;
+ });
+ return {midi:out,report};
+}
+
+/* ---------- MIDI writer ---------- */
+function buildTrack(track,m,includeGlobals){
+ const ev=[];
+ if(includeGlobals){
+   ev.push({tick:0,ord:0,data:[0xFF,0x51,3,(m.tempo>>16)&255,(m.tempo>>8)&255,m.tempo&255]});
+   const pow=Math.round(Math.log2(m.timeSig[1]||4));ev.push({tick:0,ord:0,data:[0xFF,0x58,4,m.timeSig[0]||4,pow,24,8]});
+ }
+ const name=[...new TextEncoder().encode(track.name||"Track")];ev.push({tick:0,ord:0,data:[0xFF,0x03,...writeVLQ(name.length),...name]});
+ for(const [ch,p] of track.programs||[])ev.push({tick:0,ord:1,data:[0xC0|(ch&15),p&127]});
+ for(const n of track.notes){
+   ev.push({tick:n.start,ord:2,data:[0x90|(n.channel&15),n.pitch&127,n.velocity&127]});
+   ev.push({tick:n.end,ord:1,data:[0x80|(n.channel&15),n.pitch&127,0]});
+ }
+ ev.sort((a,b)=>a.tick-b.tick||a.ord-b.ord);let last=0,data=[];
+ for(const e of ev){data.push(...writeVLQ(Math.max(0,e.tick-last)),...e.data);last=e.tick}
+ data.push(0,0xFF,0x2F,0);return [...ascii("MTrk"),...u32(data.length),...data]
+}
+function encodeMidi(m){
+ const tracks=m.tracks.filter(t=>t.notes.length||t.events.length||t.programs.length);
+ const body=tracks.flatMap((t,i)=>buildTrack(t,m,i===0));
+ return new Uint8Array([...ascii("MThd"),...u32(6),...u16(tracks.length>1?1:0),...u16(tracks.length),...u16(m.ppq),...body]);
+}
+
+/* ---------- Playback ---------- */
+function stopPlayback(){if(playTimer)clearTimeout(playTimer);playTimer=null;activeNodes.forEach(n=>{try{n.stop()}catch{}});activeNodes=[];$("stop").disabled=true}
+async function playMidi(m){
+ stopPlayback();audioCtx=audioCtx||new (window.AudioContext||window.webkitAudioContext)();await audioCtx.resume();
+ const ns=allNotes(m),now=audioCtx.currentTime+.06,maxSec=ns.reduce((x,n)=>Math.max(x,tickToSec(n.end,m)),0);
+ for(const n of ns){
+   const osc=audioCtx.createOscillator(),gain=audioCtx.createGain(),start=now+tickToSec(n.start,m),end=now+tickToSec(n.end,m);
+   osc.type="sine";osc.frequency.value=440*Math.pow(2,(n.pitch-69)/12);
+   const amp=Math.min(.11,.018+n.velocity/127*.07);gain.gain.setValueAtTime(0,start);gain.gain.linearRampToValueAtTime(amp,start+.008);gain.gain.setValueAtTime(amp,Math.max(start+.01,end-.025));gain.gain.linearRampToValueAtTime(0,end);
+   osc.connect(gain).connect(audioCtx.destination);osc.start(start);osc.stop(end+.02);activeNodes.push(osc);
+ }
+ $("stop").disabled=false;playTimer=setTimeout(stopPlayback,(maxSec+.2)*1000);
+}
+
+/* ---------- Piano roll ---------- */
+function drawRoll(){
+ const c=$("roll"),dpr=devicePixelRatio||1,rect=c.getBoundingClientRect();c.width=rect.width*dpr;c.height=rect.height*dpr;
+ const x=c.getContext("2d");x.scale(dpr,dpr);const w=rect.width,h=rect.height,m=cleaned||original;x.fillStyle="#0b0f14";x.fillRect(0,0,w,h);
+ if(!m)return;
+ const ns=allNotes(m),a=analyse(m),zoom=+$("zoom").value,maxTick=Math.max(m.ppq*4,a.maxTick/zoom),lo=Math.max(0,a.lo-2),hi=Math.min(127,a.hi+2),range=Math.max(12,hi-lo+1);
+ x.strokeStyle="#21262d";x.lineWidth=1;
+ for(let t=0;t<=maxTick;t+=m.ppq){const px=t/maxTick*w;x.beginPath();x.moveTo(px,0);x.lineTo(px,h);x.stroke()}
+ for(let p=lo;p<=hi;p++){if([1,3,6,8,10].includes(p%12)){const y=h-(p-lo+1)/range*h;x.fillStyle="#0f151c";x.fillRect(0,y,w,h/range)}}
+ for(const n of ns){if(n.start>maxTick)continue;const px=n.start/maxTick*w,pw=Math.max(1,(Math.min(n.end,maxTick)-n.start)/maxTick*w),py=h-(n.pitch-lo+1)/range*h,ph=Math.max(2,h/range*.8);x.globalAlpha=.45+n.velocity/230;x.fillStyle=TRACK_COLORS[n.track%TRACK_COLORS.length];x.fillRect(px,py,pw,ph)}
+ x.globalAlpha=1;x.fillStyle="#8b949e";x.font="11px system-ui";x.fillText(midiName(hi),6,13);x.fillText(midiName(lo),6,h-5);
+}
+
+/* ---------- UI ---------- */
+function formatTime(s){const m=Math.floor(s/60),sec=Math.round(s%60);return m+":"+String(sec).padStart(2,"0")}
+function refresh(m){
+ const a=analyse(m);$("sTracks").textContent=m.tracks.length;$("sNotes").textContent=a.notes.toLocaleString();$("sTempo").textContent=Math.round(60000000/m.tempo)+" BPM";
+ $("sLength").textContent=formatTime(a.seconds);$("sPpq").textContent=m.ppq;$("sRange").textContent=a.notes?midiName(a.lo)+"–"+midiName(a.hi):"—";$("sVel").textContent=a.notes?Math.round(a.avgVel):"—";$("sKey").textContent=a.key;
+ $("tracks").innerHTML=m.tracks.map((t,i)=>{const n=t.notes,lo=n.length?Math.min(...n.map(x=>x.pitch)):0,hi=n.length?Math.max(...n.map(x=>x.pitch)):0;return `<div class="track"><div><b style="color:${TRACK_COLORS[i%TRACK_COLORS.length]}">${escapeHtml(t.name||"Track "+(i+1))}</b><br><small>${n.length} notes${n.length?" • "+midiName(lo)+"–"+midiName(hi):""}</small></div><span class="badge">Track ${i+1}</span></div>`}).join("");
+ drawRoll();
+}
+function escapeHtml(s){return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]))}
+function loadFile(file){
+ if(!file)return;currentFileName=file.name.replace(/\.(mid|midi)$/i,"")+"_cleaned.mid";$("status").textContent="Reading "+file.name+"…";
+ const fr=new FileReader();fr.onload=()=>{try{original=parseMidi(fr.result);cleaned=null;refresh(original);$("status").innerHTML=`<span class="goodText">Loaded ${escapeHtml(file.name)}</span>`;["clean","reset","playOriginal"].forEach(id=>$(id).disabled=false);$("playCleaned").disabled=true;$("export").disabled=true;$("report").innerHTML='<span style="color:var(--muted)">Ready to clean.</span>'}catch(e){$("status").innerHTML=`<span class="badText">${escapeHtml(e.message)}</span>`}};fr.readAsArrayBuffer(file)
+}
+function runClean(){
+ const opt={minMs:+$("minMs").value,grid:+$("grid").value,strength:+$("strength").value,velSmooth:+$("velSmooth").value,mergeMs:+$("mergeMs").value,duplicates:$("duplicates").checked,overlaps:$("overlaps").checked,tiny:$("tiny").checked,merge:$("merge").checked};
+ const r=cleanMidi(original,opt);cleaned=r.midi;refresh(cleaned);$("playCleaned").disabled=false;$("export").disabled=false;
+ const labels={duplicates:"Exact duplicates removed",tiny:"Tiny notes removed",overlaps:"Overlaps repaired",merged:"Repeated notes merged",quantised:"Note starts adjusted",velocities:"Velocities smoothed",noteOffs:"Missing note-offs repaired"};
+ $("report").innerHTML=Object.entries(r.report).map(([k,v])=>`<div><b class="${v?"goodText":""}">${v}</b> ${labels[k]}</div>`).join("");
+}
+$("drop").onclick=()=>$("file").click();$("file").onchange=e=>loadFile(e.target.files[0]);
+$("drop").ondragover=e=>{e.preventDefault();$("drop").classList.add("drag")};$("drop").ondragleave=()=>$("drop").classList.remove("drag");
+$("drop").ondrop=e=>{e.preventDefault();$("drop").classList.remove("drag");loadFile(e.dataTransfer.files[0])};
+$("strength").oninput=e=>$("strengthOut").textContent=e.target.value+"%";$("velSmooth").oninput=e=>$("velOut").textContent=e.target.value+"%";
+$("clean").onclick=runClean;$("reset").onclick=()=>{cleaned=null;refresh(original);$("playCleaned").disabled=true;$("export").disabled=true;$("report").innerHTML='<span style="color:var(--muted)">Reset to original.</span>'};
+$("playOriginal").onclick=()=>playMidi(original);$("playCleaned").onclick=()=>playMidi(cleaned);$("stop").onclick=stopPlayback;$("zoom").oninput=drawRoll;
+$("export").onclick=()=>{const data=encodeMidi(cleaned),blob=new Blob([data],{type:"audio/midi"}),a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=currentFileName;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)};
+addEventListener("resize",drawRoll);
+drawRoll();
+</script>
+</body>
+</html>
