@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>MIDI Cleaner Lite v1.5</title>
+<title>MIDI Cleaner Lite v1.6</title>
 <style>
 :root{--bg:#0d1117;--panel:#161b22;--panel2:#21262d;--line:#30363d;--text:#e6edf3;--muted:#8b949e;--accent:#58a6ff;--good:#3fb950;--warn:#d29922;--bad:#f85149}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,-apple-system,Segoe UI,sans-serif}
@@ -86,8 +86,10 @@ canvas{width:100%;height:390px;background:#0b0f14;border:1px solid var(--line);b
 <button id="playOriginal" disabled>▶ Original</button>
 <button id="playCleaned" disabled>▶ Cleaned</button>
 <button id="stop" disabled>■ Stop</button>
+<button id="undo" disabled>↶ Undo</button>
 <button id="deleteNote" disabled>🗑 Delete selected</button>
-<label style="margin:0;display:flex;align-items:center;gap:6px">Zoom <input id="zoom" type="range" min="1" max="8" step=".25" value="2" style="width:150px"></label>
+<label style="margin:0;display:flex;align-items:center;gap:6px">Zoom <input id="zoom" type="range" min="1" max="8" step=".25" value="2" style="width:120px"></label>
+<label style="margin:0;display:flex;align-items:center;gap:6px">Speed <span id="speedOut" style="min-width:34px;text-align:right">1.00×</span><input id="speed" type="range" min="25" max="200" step="1" value="100" style="width:130px"></label>
 <label style="margin:0;display:flex;align-items:center;gap:6px"><input id="showGhost" type="checkbox" checked style="width:auto"> Show original overlay</label>
 </div>
 <div id="liveOverlay" style="position:relative;height:0">
@@ -101,7 +103,7 @@ canvas{width:100%;height:390px;background:#0b0f14;border:1px solid var(--line);b
 </span>
 <span style="display:inline-block;width:10px;height:10px;background:#ffd866;border-radius:2px;margin:0 4px 0 14px;vertical-align:middle"></span>Currently playing
 </div>
-<div style="font-size:11px;color:var(--muted);margin-top:4px">Tap/click a note to select • drag to move • drag the right edge to resize • Delete/Backspace or the Delete button to remove<span id="editCount"></span></div>
+<div style="font-size:11px;color:var(--muted);margin-top:4px">Tap/click a note to select • Shift-tap or drag on empty area to add to selection • drag to move • drag the right edge to resize • Delete or ⌘/Ctrl-Z to undo<span id="editCount"></span></div>
 </section>
 
 <section class="panel">
@@ -120,8 +122,8 @@ const $=id=>document.getElementById(id);
 const NOTE_NAMES=["C","C♯","D","D♯","E","F","F♯","G","G♯","A","A♯","B"];
 const TRACK_COLORS=["#58a6ff","#3fb950","#d29922","#f778ba","#a371f7","#ff7b72","#79c0ff","#56d364"];
 let original=null, cleaned=null, currentFileName="cleaned.mid", audioCtx=null, activeNodes=[], playTimer=null;
-let selected=null, drag=null, manualEdits=0; // piano-roll editing state
-let playState=null, playRAF=null; // {m, anchor} — real-time playhead for highlighting/chord label
+let selected=[], drag=null, marquee=null, manualEdits=0, undoStack=[]; // piano-roll editing state
+let playState=null, playRAF=null, playSpeed=1; // real-time playhead + tempo multiplier
 
 /* ---------- Binary utilities ---------- */
 class Reader{
@@ -272,21 +274,22 @@ function stopPlayback(){
 }
 async function playMidi(m){
  stopPlayback();audioCtx=audioCtx||new (window.AudioContext||window.webkitAudioContext)();await audioCtx.resume();
- const ns=allNotes(m),now=audioCtx.currentTime+.06,maxSec=ns.reduce((x,n)=>Math.max(x,tickToSec(n.end,m)),0);
+ const sp=Math.max(.05,playSpeed||1);
+ const ns=allNotes(m),now=audioCtx.currentTime+.06,maxSec=ns.reduce((x,n)=>Math.max(x,tickToSec(n.end,m)),0)/sp;
  for(const n of ns){
-   const osc=audioCtx.createOscillator(),gain=audioCtx.createGain(),start=now+tickToSec(n.start,m),end=now+tickToSec(n.end,m);
+   const osc=audioCtx.createOscillator(),gain=audioCtx.createGain(),start=now+tickToSec(n.start,m)/sp,end=now+tickToSec(n.end,m)/sp;
    osc.type="sine";osc.frequency.value=440*Math.pow(2,(n.pitch-69)/12);
    const amp=Math.min(.11,.018+n.velocity/127*.07);gain.gain.setValueAtTime(0,start);gain.gain.linearRampToValueAtTime(amp,start+.008);gain.gain.setValueAtTime(amp,Math.max(start+.01,end-.025));gain.gain.linearRampToValueAtTime(0,end);
    osc.connect(gain).connect(audioCtx.destination);osc.start(start);osc.stop(end+.02);activeNodes.push(osc);
  }
  $("stop").disabled=false;
  playTimer=setTimeout(stopPlayback,(maxSec+.2)*1000);
- playState={m,anchor:now,duration:maxSec};
+ playState={m,anchor:now,duration:maxSec,speed:sp};
  animatePlayhead();
 }
 function animatePlayhead(){
  if(!playState)return;
- const elapsed=audioCtx.currentTime-playState.anchor;
+ const elapsed=(audioCtx.currentTime-playState.anchor)*playState.speed;
  if(elapsed>=0){
    updateChordLabel(playState.m,secToTick(elapsed,playState.m));
    drawRoll();
@@ -345,7 +348,7 @@ function drawRoll(){
  function rectFor(n){return [n.start/maxTick*w,h-(n.pitch-lo+1)/range*h,Math.max(1,(Math.min(n.end,maxTick)-n.start)/maxTick*w),Math.max(2,h/range*.8)]}
  // Which dataset is actually sounding right now (if anything), and at what tick — used to
  // highlight notes as they play, independent of which layer (ghost/solid) is drawing them.
- const playingTick=playState?secToTick(Math.max(0,audioCtx.currentTime-playState.anchor),playState.m):null;
+ const playingTick=playState?secToTick(Math.max(0,(audioCtx.currentTime-playState.anchor)*(playState.speed||1)),playState.m):null;
  function isSounding(n,matchesPlayingSet){return matchesPlayingSet&&playingTick!==null&&playingTick>=n.start&&playingTick<n.end}
  // Ghosted original drawn first (so removed/trimmed/shifted notes are visible as a "shadow"),
  // then the editable (cleaned, or original if nothing's been cleaned/edited yet) result on top.
@@ -359,6 +362,7 @@ function drawRoll(){
    }
  }
  const solidPlaying=playState&&playState.m===editableM;
+ const selSet=new Set(selected.map(s=>s.note));
  for(const {n,ti,ni} of liveEditable){
    if(n.start>maxTick)continue;
    const [px,py,pw,ph]=rectFor(n);
@@ -366,9 +370,14 @@ function drawRoll(){
    if(sounding){x.globalAlpha=1;x.fillStyle="#ffd866"}else{x.globalAlpha=.45+n.velocity/230;x.fillStyle=TRACK_COLORS[ti%TRACK_COLORS.length]}
    x.fillRect(px,py,pw,ph);
    if(sounding){x.globalAlpha=1;x.strokeStyle=TRACK_COLORS[ti%TRACK_COLORS.length];x.lineWidth=1.5;x.strokeRect(px+.75,py+.75,pw-1.5,ph-1.5)}
-   if(selected&&selected.ti===ti&&selected.ni===ni){
+   if(selSet.has(n)){
      x.globalAlpha=1;x.strokeStyle="#fff";x.lineWidth=1.5;x.strokeRect(px+.75,py+.75,pw-1.5,ph-1.5);
    }
+ }
+ if(marquee){
+   const [a,b,c,d]=marquee;const rx=Math.min(a,c),ry=Math.min(b,d),rw=Math.abs(c-a),rh=Math.abs(d-b);
+   x.globalAlpha=1;x.fillStyle="rgba(88,166,255,.15)";x.fillRect(rx,ry,rw,rh);
+   x.strokeStyle="#58a6ff";x.lineWidth=1;x.strokeRect(rx+.5,ry+.5,rw-1,rh-1);
  }
  x.globalAlpha=1;x.fillStyle="#8b949e";x.font="11px system-ui";x.fillText(midiName(hi),6,13);x.fillText(midiName(lo),6,h-5);
 }
@@ -384,16 +393,16 @@ function refresh(m){
 function escapeHtml(s){return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]))}
 function loadFile(file){
  if(!file)return;currentFileName=file.name.replace(/\.(mid|midi)$/i,"")+"_cleaned.mid";$("status").textContent="Reading "+file.name+"…";
- const fr=new FileReader();fr.onload=()=>{try{original=parseMidi(fr.result);cleaned=null;selected=null;manualEdits=0;updateEditCount();updateDeleteBtn();refresh(original);$("status").innerHTML=`<span class="goodText">Loaded ${escapeHtml(file.name)}</span>`;["clean","reset","playOriginal"].forEach(id=>$(id).disabled=false);$("playCleaned").disabled=true;$("export").disabled=true;$("report").innerHTML='<span style="color:var(--muted)">Ready to clean.</span>'}catch(e){$("status").innerHTML=`<span class="badText">${escapeHtml(e.message)}</span>`}};fr.readAsArrayBuffer(file)
+ const fr=new FileReader();fr.onload=()=>{try{original=parseMidi(fr.result);cleaned=null;selected=[];undoStack=[];manualEdits=0;updateEditCount();updateDeleteBtn();updateUndoBtn();refresh(original);$("status").innerHTML=`<span class="goodText">Loaded ${escapeHtml(file.name)}</span>`;["clean","reset","playOriginal"].forEach(id=>$(id).disabled=false);$("playCleaned").disabled=true;$("export").disabled=true;$("report").innerHTML='<span style="color:var(--muted)">Ready to clean.</span>'}catch(e){$("status").innerHTML=`<span class="badText">${escapeHtml(e.message)}</span>`}};fr.readAsArrayBuffer(file)
 }
 function runClean(){
  const opt={minMs:+$("minMs").value,grid:+$("grid").value,strength:+$("strength").value,velSmooth:+$("velSmooth").value,mergeMs:+$("mergeMs").value,duplicates:$("duplicates").checked,overlaps:$("overlaps").checked,tiny:$("tiny").checked,merge:$("merge").checked};
- const r=cleanMidi(original,opt);cleaned=r.midi;selected=null;manualEdits=0;updateEditCount();updateDeleteBtn();refresh(cleaned);$("playCleaned").disabled=false;$("export").disabled=false;
+ const r=cleanMidi(original,opt);cleaned=r.midi;selected=[];undoStack=[];manualEdits=0;updateEditCount();updateDeleteBtn();updateUndoBtn();refresh(cleaned);$("playCleaned").disabled=false;$("export").disabled=false;
  const labels={duplicates:"Exact duplicates removed",tiny:"Tiny notes removed",overlaps:"Overlaps repaired",merged:"Repeated notes merged",quantised:"Note starts adjusted",velocities:"Velocities smoothed",noteOffs:"Missing note-offs repaired"};
  $("report").innerHTML=Object.entries(r.report).map(([k,v])=>`<div><b class="${v?"goodText":""}">${v}</b> ${labels[k]}</div>`).join("");
 }
 
-/* ---------- Piano roll editing (move / resize / delete) ---------- */
+/* ---------- Piano roll editing (multi-select / move / resize / delete / undo) ---------- */
 function ensureEditable(){
  if(!cleaned){cleaned=cloneMidi(original);$("playCleaned").disabled=false;$("export").disabled=false}
  return cleaned;
@@ -401,55 +410,148 @@ function ensureEditable(){
 function updateEditCount(){
  $("editCount").textContent=manualEdits?` • ${manualEdits} manual edit${manualEdits===1?"":"s"} applied (lost if you run Clean MIDI again or Reset)`:"";
 }
+function selectionKey(){
+ // Map selected notes to {ti, pitch, start} tuples so we can rebuild refs after cloneMidi.
+ return selected.map(s=>{const ti=s.ti,idx=cleaned.tracks[ti].notes.indexOf(s.note);const n=cleaned.tracks[ti].notes[idx];return {ti,pitch:n.pitch,start:n.start}});
+}
+function rehydrateSelection(keys){
+ selected=[];
+ for(const k of keys){
+   const notes=cleaned.tracks[k.ti]&&cleaned.tracks[k.ti].notes;if(!notes)continue;
+   const found=notes.find(n=>n.pitch===k.pitch&&n.start===k.start);
+   if(found)selected.push({ti:k.ti,note:found});
+ }
+}
+function pushUndo(){
+ // Snapshot the editable model + selection keys before any mutation.
+ ensureEditable();
+ undoStack.push({midi:cloneMidi(cleaned),selKeys:selectionKey()});
+ if(undoStack.length>200)undoStack.shift();
+ updateUndoBtn();
+}
+function doUndo(){
+ if(!undoStack.length)return;
+ const snap=undoStack.pop();
+ cleaned=snap.midi;
+ rehydrateSelection(snap.selKeys);
+ manualEdits=Math.max(0,manualEdits-1);
+ updateEditCount();updateDeleteBtn();updateUndoBtn();refresh(cleaned);
+}
+function updateUndoBtn(){$("undo").disabled=!undoStack.length}
 function canvasPos(e){const r=$("roll").getBoundingClientRect();return [e.clientX-r.left,e.clientY-r.top]}
 function hitTest(px,py,pointerType){
  if(!rollLayout||!original)return null;
  const {maxTick,lo,range,w,h}=rollLayout,m=cleaned||original;
  const list=liveNotes(m);
- // Touch/pencil get a much larger resize-edge target than a mouse cursor needs.
  const edgeZone=pointerType==="mouse"?6:16;
  for(let i=list.length-1;i>=0;i--){
    const {n,ti,ni}=list[i];
    if(n.start>maxTick)continue;
    const nx=n.start/maxTick*w,nw=Math.max(1,(Math.min(n.end,maxTick)-n.start)/maxTick*w),ny=h-(n.pitch-lo+1)/range*h,nh=Math.max(2,h/range*.8);
-   if(px>=nx&&px<=nx+nw&&py>=ny&&py<=ny+nh)return {ti,ni,edge:px>=nx+nw-Math.min(edgeZone,nw*.4)};
+   if(px>=nx&&px<=nx+nw&&py>=ny&&py<=ny+nh)return {ti,ni,note:n,edge:px>=nx+nw-Math.min(edgeZone,nw*.4)};
  }
  return null;
 }
-function updateDeleteBtn(){$("deleteNote").disabled=!selected}
+function isSelected(note){return selected.some(s=>s.note===note)}
+function updateDeleteBtn(){$("deleteNote").disabled=!selected.length;$("deleteNote").textContent=selected.length>1?`🗑 Delete selected (${selected.length})`:"🗑 Delete selected"}
 function deleteSelected(){
- if(!selected)return;
- ensureEditable();
- cleaned.tracks[selected.ti].notes.splice(selected.ni,1);
- selected=null;manualEdits++;updateEditCount();updateDeleteBtn();refresh(cleaned);
+ if(!selected.length)return;
+ pushUndo();
+ const bySel=new Map();
+ for(const s of selected){if(!bySel.has(s.ti))bySel.set(s.ti,new Set());bySel.get(s.ti).add(s.note)}
+ for(const [ti,set] of bySel){cleaned.tracks[ti].notes=cleaned.tracks[ti].notes.filter(n=>!set.has(n))}
+ selected=[];manualEdits++;updateEditCount();updateDeleteBtn();refresh(cleaned);
 }
 $("roll").addEventListener("pointerdown",e=>{
  if(!original||(e.pointerType==="mouse"&&e.button!==0))return;
  const [px,py]=canvasPos(e),hit=hitTest(px,py,e.pointerType);
- if(!hit){selected=null;updateDeleteBtn();drawRoll();return}
+ const additive=e.shiftKey||e.metaKey||e.ctrlKey;
+ if(!hit){
+   // Empty area → start marquee selection.
+   e.preventDefault();
+   $("roll").setPointerCapture(e.pointerId);
+   const baseSel=additive?selected.slice():[];
+   if(!additive){selected=[];updateDeleteBtn();drawRoll()}
+   marquee=[px,py,px,py];
+   const onMove=ev=>{
+     if(ev.pointerId!==e.pointerId)return;
+     const [mx,my]=canvasPos(ev);marquee=[px,py,mx,my];
+     // Live-update selection preview.
+     const {maxTick,lo,range,w,h}=rollLayout;
+     const rx=Math.min(px,mx),ry=Math.min(py,my),rw=Math.abs(mx-px),rh=Math.abs(my-py);
+     const inside=[];
+     for(const {n,ti} of liveNotes(cleaned||original)){
+       const nx=n.start/maxTick*w,nw=Math.max(1,(Math.min(n.end,maxTick)-n.start)/maxTick*w),ny=h-(n.pitch-lo+1)/range*h,nh=Math.max(2,h/range*.8);
+       if(nx<rx+rw&&nx+nw>rx&&ny<ry+rh&&ny+nh>ry)inside.push({ti,note:n});
+     }
+     const seen=new Set(baseSel.map(s=>s.note));
+     selected=baseSel.slice();
+     for(const s of inside)if(!seen.has(s.note)){selected.push(s);seen.add(s.note)}
+     updateDeleteBtn();drawRoll();
+   };
+   const onUp=ev=>{
+     if(ev.pointerId!==e.pointerId)return;
+     marquee=null;drawRoll();
+     $("roll").removeEventListener("pointermove",onMove);
+     $("roll").removeEventListener("pointerup",onUp);
+     $("roll").removeEventListener("pointercancel",onUp);
+   };
+   $("roll").addEventListener("pointermove",onMove);
+   $("roll").addEventListener("pointerup",onUp);
+   $("roll").addEventListener("pointercancel",onUp);
+   return;
+ }
  e.preventDefault();
  $("roll").setPointerCapture(e.pointerId);
  ensureEditable();
- selected={ti:hit.ti,ni:hit.ni};updateDeleteBtn();
- const n=cleaned.tracks[hit.ti].notes[hit.ni];
- drag={ti:hit.ti,ni:hit.ni,mode:hit.edge?"resize":"move",startPx:px,startPy:py,origStart:n.start,origEnd:n.end,origPitch:n.pitch,moved:false};
- drawRoll();
+// Rebind hit to the cloned cleaned note if we just created the editable copy.
+hit.note=cleaned.tracks[hit.ti].notes[hit.ni];
+// Determine selection after this pointerdown.
+ const already=isSelected(hit.note);
+ if(additive){
+   if(already)selected=selected.filter(s=>s.note!==hit.note);
+   else selected.push({ti:hit.ti,note:hit.note});
+ }else if(!already){
+   selected=[{ti:hit.ti,note:hit.note}];
+ }
+ updateDeleteBtn();drawRoll();
+ // Only drag if the pressed note is in the (possibly newly formed) selection.
+ if(!isSelected(hit.note)){drag=null;return}
+ // Snapshot every selected note's original position for group move / resize.
+ const originals=selected.map(s=>({ti:s.ti,note:s.note,origStart:s.note.start,origEnd:s.note.end,origPitch:s.note.pitch}));
+ drag={mode:hit.edge?"resize":"move",startPx:px,startPy:py,anchorNote:hit.note,originals,moved:false,snapshotTaken:false};
  const onMove=ev=>{
    if(ev.pointerId!==e.pointerId)return;
    const [mx,my]=canvasPos(ev),dxTicks=(mx-drag.startPx)*(rollLayout.maxTick/rollLayout.w);
-   const dn=cleaned.tracks[drag.ti].notes[drag.ni];
+   const dyRows=(my-drag.startPy)*(rollLayout.range/rollLayout.h);
    const gridSel=+$("grid").value,gridTicks=gridSel?original.ppq*4/gridSel:0;
-   if(Math.abs(mx-drag.startPx)>1||Math.abs(my-drag.startPy)>1)drag.moved=true;
-   if(drag.mode==="resize"){
-     let newEnd=Math.round(drag.origEnd+dxTicks);
-     if(gridTicks)newEnd=Math.round(newEnd/gridTicks)*gridTicks;
-     dn.end=Math.max(dn.start+1,newEnd);
-   }else{
-     const dyRows=(my-drag.startPy)*(rollLayout.range/rollLayout.h);
-     let newStart=Math.max(0,Math.round(drag.origStart+dxTicks));
-     if(gridTicks)newStart=Math.round(newStart/gridTicks)*gridTicks;
-     dn.start=newStart;dn.end=newStart+(drag.origEnd-drag.origStart);
-     dn.pitch=Math.max(0,Math.min(127,Math.round(drag.origPitch-dyRows)));
+   if(!drag.moved&&(Math.abs(mx-drag.startPx)>2||Math.abs(my-drag.startPy)>2)){
+     drag.moved=true;
+     if(!drag.snapshotTaken){pushUndo();drag.snapshotTaken=true}
+   }
+   // Compute snapped dx from the anchor note so the whole group stays aligned to the grid.
+   let snapDx=dxTicks;
+   if(gridTicks&&drag.mode==="move"){
+     const a=drag.originals.find(o=>o.note===drag.anchorNote)||drag.originals[0];
+     const target=Math.round((a.origStart+dxTicks)/gridTicks)*gridTicks;snapDx=target-a.origStart;
+   }else if(gridTicks&&drag.mode==="resize"){
+     const a=drag.originals.find(o=>o.note===drag.anchorNote)||drag.originals[0];
+     const target=Math.round((a.origEnd+dxTicks)/gridTicks)*gridTicks;snapDx=target-a.origEnd;
+   }
+   for(const o of drag.originals){
+     if(drag.mode==="resize"){
+       o.note.end=Math.max(o.origStart+1,Math.round(o.origEnd+snapDx));
+     }else{
+       const minStart=Math.min(...drag.originals.map(x=>x.origStart));
+       const lowPitch=Math.min(...drag.originals.map(x=>x.origPitch));
+       const highPitch=Math.max(...drag.originals.map(x=>x.origPitch));
+       const sharedDx=Math.max(snapDx,-minStart);
+       const sharedPitch=Math.max(-lowPitch,Math.min(-dyRows,127-highPitch));
+       const ns=Math.round(o.origStart+sharedDx);
+       o.note.start=ns;
+       o.note.end=ns+(o.origEnd-o.origStart);
+       o.note.pitch=Math.round(o.origPitch+sharedPitch);
+     }
    }
    drawRoll();
  };
@@ -466,25 +568,31 @@ $("roll").addEventListener("pointerdown",e=>{
  $("roll").addEventListener("pointercancel",onUp);
 });
 $("roll").addEventListener("pointermove",e=>{
- // Hover feedback only makes sense for a mouse — touch has no hover state before contact.
- if(drag||!original||e.pointerType!=="mouse")return;
+ if(drag||marquee||!original||e.pointerType!=="mouse")return;
  const [px,py]=canvasPos(e),hit=hitTest(px,py,e.pointerType);
- $("roll").style.cursor=hit?(hit.edge?"ew-resize":"grab"):"default";
+ $("roll").style.cursor=hit?(hit.edge?"ew-resize":"grab"):"crosshair";
 });
 $("deleteNote").onclick=deleteSelected;
+$("undo").onclick=doUndo;
 document.addEventListener("keydown",e=>{
- if((e.key==="Delete"||e.key==="Backspace")&&selected){
-   const tag=(document.activeElement&&document.activeElement.tagName)||"";
-   if(tag==="INPUT"||tag==="SELECT"||tag==="TEXTAREA")return;
-   e.preventDefault();deleteSelected();
+ const tag=(document.activeElement&&document.activeElement.tagName)||"";
+ if(tag==="INPUT"||tag==="SELECT"||tag==="TEXTAREA")return;
+ if((e.key==="z"||e.key==="Z")&&(e.metaKey||e.ctrlKey)){e.preventDefault();doUndo();return}
+ if((e.key==="Delete"||e.key==="Backspace")&&selected.length){e.preventDefault();deleteSelected()}
+ if((e.key==="a"||e.key==="A")&&(e.metaKey||e.ctrlKey)&&cleaned){
+   e.preventDefault();
+   selected=[];cleaned.tracks.forEach((t,ti)=>t.notes.forEach(n=>selected.push({ti,note:n})));
+   updateDeleteBtn();drawRoll();
  }
+ if(e.key==="Escape"&&selected.length){selected=[];updateDeleteBtn();drawRoll()}
 });
 
 $("drop").onclick=()=>$("file").click();$("file").onchange=e=>loadFile(e.target.files[0]);
 $("drop").ondragover=e=>{e.preventDefault();$("drop").classList.add("drag")};$("drop").ondragleave=()=>$("drop").classList.remove("drag");
 $("drop").ondrop=e=>{e.preventDefault();$("drop").classList.remove("drag");loadFile(e.dataTransfer.files[0])};
 $("strength").oninput=e=>$("strengthOut").textContent=e.target.value+"%";$("velSmooth").oninput=e=>$("velOut").textContent=e.target.value+"%";
-$("clean").onclick=runClean;$("reset").onclick=()=>{cleaned=null;selected=null;manualEdits=0;updateEditCount();updateDeleteBtn();refresh(original);$("playCleaned").disabled=true;$("export").disabled=true;$("report").innerHTML='<span style="color:var(--muted)">Reset to original.</span>'};
+$("speed").oninput=e=>{playSpeed=(+e.target.value)/100;$("speedOut").textContent=playSpeed.toFixed(2)+"×"};
+$("clean").onclick=runClean;$("reset").onclick=()=>{cleaned=null;selected=[];undoStack=[];manualEdits=0;updateEditCount();updateDeleteBtn();updateUndoBtn();refresh(original);$("playCleaned").disabled=true;$("export").disabled=true;$("report").innerHTML='<span style="color:var(--muted)">Reset to original.</span>'};
 $("playOriginal").onclick=()=>playMidi(original);$("playCleaned").onclick=()=>playMidi(cleaned);$("stop").onclick=stopPlayback;$("zoom").oninput=drawRoll;$("showGhost").onchange=drawRoll;
 $("export").onclick=()=>{const data=encodeMidi(cleaned),blob=new Blob([data],{type:"audio/midi"}),a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=currentFileName;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)};
 addEventListener("resize",drawRoll);
